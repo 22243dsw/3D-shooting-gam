@@ -1,0 +1,239 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>EMOJI CARNAGE: HARDCORE</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #050000; font-family: 'Courier New', monospace; }
+        #vignette { position: fixed; inset: 0; background: radial-gradient(circle, transparent 10%, rgba(0,0,0,1) 100%); pointer-events: none; z-index: 50; }
+        #hud { position: absolute; bottom: 30px; left: 30px; z-index: 100; color: #f00; pointer-events: none; }
+        .bar { width: 250px; height: 6px; border: 1px solid #f00; background: #200; position: relative; }
+        #hp-fill { height: 100%; background: #f00; width: 100%; }
+        #weapon-info { font-size: 20px; color: #ff0; margin-top: 10px; text-transform: uppercase; }
+    </style>
+</head>
+<body>
+    <div id="vignette"></div>
+    <div id="hud">
+        KILLS: <span id="kl">0</span>
+        <div class="bar"><div id="hp-fill"></div></div>
+        <div id="weapon-info">EQUIPPED: <span id="gn">GLOCK</span></div>
+    </div>
+    <canvas id="game"></canvas>
+
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = canvas.width = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+
+
+// 1. 物理与实体配置
+const worldSize = 4000;
+let camera = { x: 2000, y: 2000, shake: 0 };
+let player = { x: 2000, y: 2000, vx: 0, vy: 0, hp: 100, angle: 0, slot: 0, cooldown: 0 };
+let stats = { kills: 0 };
+let stopFrame = 0;
+
+
+const GUNS = [
+    { name: 'AUTO-PISTOL', dmg: 35, rate: 120, spread: 0.08, bSpd: 22, recoil: 4, push: 0.5, emoji: '🔫' },
+    { name: 'STREET-SWEEPER', dmg: 15, rate: 700, spread: 0.6, bSpd: 14, recoil: 18, push: 5, pellets: 12, emoji: ' shotgun' },
+    { name: 'DEATH-RAY', dmg: 1000, rate: 1500, spread: 0, bSpd: 60, recoil: 40, push: 15, emoji: '🚀' }
+];
+
+
+let enemies = [], bullets = [], particles = [], walls = [], bloodPools = [];
+
+
+// 2. 迷宫墙壁生成
+for(let i=0; i<80; i++) {
+    walls.push({
+        x: Math.random() * worldSize, y: Math.random() * worldSize,
+        w: 40 + Math.random()*200, h: 40 + Math.random()*200
+    });
+}
+
+
+function spawnPart(x, y, color, count, f, size=4) {
+    for(let i=0; i<count; i++) {
+        particles.push({
+            x, y, vx: (Math.random()-0.5)*f, vy: (Math.random()-0.5)*f,
+            life: 40, color, size: Math.random()*size, gravity: 0.2
+        });
+    }
+}
+
+
+function update() {
+    if(stopFrame > 0) { stopFrame--; return; }
+
+
+    camera.shake *= 0.85;
+    camera.x += (player.x - camera.x) * 0.1 + (Math.random()-0.5)*camera.shake;
+    camera.y += (player.y - camera.y) * 0.1 + (Math.random()-0.5)*camera.shake;
+
+
+    // 物理移动与摩擦
+    player.vx *= 0.88; player.vy *= 0.88;
+    let nx = player.x + player.vx, ny = player.y + player.vy;
+    
+    let collision = false;
+    walls.forEach(w => {
+        if(nx+15 > w.x && nx-15 < w.x+w.w && ny+15 > w.y && ny-15 < w.y+w.h) collision = true;
+    });
+    if(!collision) { player.x = nx; player.y = ny; }
+
+
+    // 子弹逻辑
+    bullets.forEach((b, bi) => {
+        b.x += b.vx; b.y += b.vy;
+        
+        enemies.forEach((e, ei) => {
+            if(Math.hypot(b.x-e.x, b.y-e.y) < 30) {
+                e.hp -= b.dmg; b.life = 0;
+                stopFrame = 2; camera.shake = 10;
+                spawnPart(b.x, b.y, '#f00', 8, 5); // 血液喷溅
+                if(e.hp <= 0) {
+                    bloodPools.push({x: e.x, y: e.y, r: 30+Math.random()*20});
+                    spawnPart(e.x, e.y, '#900', 20, 10, 6);
+                    enemies.splice(ei, 1); stats.kills++;
+                }
+            }
+        });
+        walls.forEach(w => {
+            if(b.x > w.x && b.x < w.x+w.w && b.y > w.y && b.y < w.y+w.h) b.life = 0;
+        });
+        if(--b.life <= 0) bullets.splice(bi, 1);
+    });
+
+
+    // 敌人 AI (幽灵👻会穿过一点墙)
+    enemies.forEach(e => {
+        let angle = Math.atan2(player.y - e.y, player.x - e.x);
+        e.x += Math.cos(angle) * e.spd; e.y += Math.sin(angle) * e.spd;
+        if(Math.hypot(player.x-e.x, player.y-e.y) < 30 && gameTime % 30 === 0) {
+            player.hp -= 15; camera.shake = 25;
+        }
+    });
+
+
+    particles.forEach((p, i) => {
+        p.x += p.vx; p.y += p.vy; p.vy += p.gravity;
+        if(--p.life <= 0) particles.splice(i, 1);
+    });
+}
+
+
+function draw() {
+    ctx.fillStyle = '#050000'; ctx.fillRect(0,0,W,H);
+    ctx.save();
+    ctx.translate(-camera.x + W/2, -camera.y + H/2);
+
+
+    // 绘制血泊
+    bloodPools.forEach(p => {
+        ctx.fillStyle = 'rgba(120, 0, 0, 0.4)';
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+    });
+
+
+    // 绘制墙壁
+    ctx.fillStyle = '#111';
+    walls.forEach(w => ctx.fillRect(w.x, w.y, w.w, w.h));
+
+
+    // 绘制幽灵👻
+    ctx.font = '30px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    enemies.forEach(e => {
+        ctx.fillText('👻', e.x, e.y);
+    });
+
+
+    // 绘制玩家与武器
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(player.angle);
+    ctx.fillText('👤', 0, 0);
+    ctx.font = '20px Arial';
+    ctx.fillText(GUNS[player.slot].emoji, 25, 5); // 武器显示
+    ctx.restore();
+
+
+    // 子弹与粒子
+    bullets.forEach(b => { ctx.fillStyle = '#ff0'; ctx.fillRect(b.x-2, b.y-2, 6, 2); });
+    particles.forEach(p => {
+        ctx.fillStyle = p.color; ctx.globalAlpha = p.life/40;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+        ctx.globalAlpha = 1;
+    });
+
+
+    ctx.restore();
+
+
+    // UI
+    document.getElementById('hp-fill').style.width = player.hp + "%";
+    document.getElementById('kl').innerText = stats.kills;
+    document.getElementById('gn').innerText = GUNS[player.slot].name;
+}
+
+
+// 控制
+const keys = {};
+window.onkeydown = e => { 
+    keys[e.key.toLowerCase()] = true;
+    if(['1','2','3'].includes(e.key)) player.slot = e.key - 1;
+};
+window.onkeyup = e => keys[e.key.toLowerCase()] = false;
+window.onmousemove = e => player.angle = Math.atan2(e.clientY - H/2, e.clientX - W/2);
+
+
+window.onmousedown = () => {
+    let g = GUNS[player.slot];
+    if(Date.now() - player.cooldown < g.rate) return;
+    player.cooldown = Date.now();
+    camera.shake = g.recoil;
+    
+    // 后坐力推力
+    player.vx -= Math.cos(player.angle) * g.push;
+    player.vy -= Math.sin(player.angle) * g.push;
+
+
+    // 抛壳效果
+    spawnPart(player.x, player.y, '#fb0', 1, 3, 3);
+
+
+    let pCount = g.pellets || 1;
+    for(let i=0; i<pCount; i++){
+        let a = player.angle + (Math.random()-0.5)*g.spread;
+        bullets.push({x:player.x, y:player.y, vx:Math.cos(a)*g.bSpd, vy:Math.sin(a)*g.bSpd, dmg:g.dmg, life:60});
+    }
+};
+
+
+let gameTime = 0;
+function main() {
+    gameTime++;
+    if(player.hp > 0) {
+        let speed = 4;
+        if(keys['w']) player.vy -= speed * 0.2;
+        if(keys['s']) player.vy += speed * 0.2;
+        if(keys['a']) player.vx -= speed * 0.2;
+        if(keys['d']) player.vx += speed * 0.2;
+        update();
+    }
+    draw();
+    // 增加敌人群数
+    if(enemies.length < 30 + stats.kills/5) {
+        enemies.push({x: Math.random()*worldSize, y: Math.random()*worldSize, hp: 50, spd: 3+Math.random()*2});
+    }
+    requestAnimationFrame(main);
+}
+main();
+</script>
+</body>
+</html>
